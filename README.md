@@ -1,5 +1,9 @@
 # Kinship Collective
 
+<p align="center">
+  <img src="./assets/kinship-hero.svg" alt="Kinship Collective hero artwork" width="1200" />
+</p>
+
 Pitch the future. Back the weird, the brave, and the useful.
 
 Kinship Collective is a speculative creator-investor network where founders, creators, and backers meet inside a deliberately high-contrast digital pitch room. It blends venture-style deal flow, creator economy mechanics, and a trust-first social layer into one living product: pitch a project, fund it in small, intentional increments, track milestones, and see how culture, capital, and reputation move together.
