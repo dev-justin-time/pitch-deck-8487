@@ -17,6 +17,7 @@ export function useNetworkStats() {
 export function useSeedStatus() {
   return useQuery(orpc.seed.status.queryOptions());
 }
+/** Admin-only on the server; the loader refuses to run on a network that already has data. */
 export function useSeedRun() {
   const refresh = useRefreshAll();
   return useMutation(orpc.seed.run.mutationOptions({ onSuccess: refresh }));

@@ -1,10 +1,15 @@
-import { z } from "zod";
 import { and, eq, sql } from "drizzle-orm";
-import { base } from "../middleware/errors";
+import { ORPCError } from "@orpc/server";
+import { actorOf, adminProc, publicProc } from "../middleware/auth";
 import { db } from "../database/client";
 import * as schema from "../database/schema";
 import { runDistribution } from "./payouts";
 import { ESCROW_FEE_CENTS, daysFromNow, pitchFeeCents, pointValueForStage } from "../lib/economy";
+import { logDecision } from "../lib/log";
+import { audit } from "../lib/services/audit";
+import { openCreatorPosition, transferEquity } from "../lib/services/equity";
+import { addLedger, feeSplit } from "../lib/services/ledger";
+import { runTx, type Tx } from "../lib/services/tx";
 
 type RiskTier = "low" | "medium" | "high";
 
@@ -328,306 +333,221 @@ const DEMO_PROPOSALS = [
   },
 ];
 
+/**
+ * Demo network loader. Admin-only, and only on an empty database: it never touches an existing
+ * network, never links demo passports to auth accounts, and books every row through the same
+ * conserved structures the live API uses (equity positions, held escrow, fee splits).
+ */
 export const seed = {
-  status: base.handler(async () => {
+  status: publicProc.handler(async () => {
     const [m] = await db.select({ c: sql<number>`count(*)` }).from(schema.members);
     return { members: Number(m?.c ?? 0), seeded: Number(m?.c ?? 0) > 0 };
   }),
 
-  /** Idempotent demo data: members, projects, milestones, tickets, market, governance. */
-  run: base.input(z.object({ force: z.boolean().default(false) })).handler(async ({ input }) => {
-    const [existing] = await db.select({ c: sql<number>`count(*)` }).from(schema.members);
-    if (Number(existing?.c ?? 0) > 0 && !input.force) {
-      return { skipped: true, message: "Already seeded" };
+  run: adminProc.handler(async ({ context }) => {
+    const [existing] = await db.select({ c: sql<number>`count(*)` }).from(schema.projects);
+    if (Number(existing?.c ?? 0) > 0) {
+      logDecision("seed", "Seed skipped: network already has projects");
+      return { skipped: true as const, message: "Network already has data — the demo loader only runs on an empty database." };
     }
+    const result = await runTx("seed.run", (tx) => loadDemoNetwork(tx));
+    await audit(db, actorOf(context), { action: "seed.run", outcome: "accepted", summary: `Loaded ${result.projects} demo projects` });
+    return { skipped: false as const, ...result };
+  }),
 
-    const ids = new Map<string, number>();
-    for (const m of DEMO_MEMBERS) {
-      const [row] = await db
-        .select()
-        .from(schema.members)
-        .where(eq(schema.members.handle, m.handle));
-      if (row) {
-        ids.set(m.handle, row.id);
-        continue;
-      }
-      const [created] = await db
-        .insert(schema.members)
-        .values({
-          handle: m.handle,
-          displayName: m.displayName,
-          email: m.email,
-          role: m.role,
-          level: m.level,
-          points: m.points,
-          clout: m.clout,
-          walletCents: m.walletCents,
-          kycStatus: m.kycStatus,
-          world: m.world,
-          homeBrand: m.homeBrand,
-          bio: m.bio,
-          ongoingAccess: m.level >= 2,
-          createdAt: new Date(Date.now() - 40 * 86400000),
-        })
-        .returning();
-      ids.set(m.handle, created.id);
+  /** Idempotent: income runs on mature projects and one submission waiting for the escrow desk. */
+  activity: adminProc.handler(async ({ context }) => {
+    const result = await runTx("seed.activity", (tx) => seedActivity(tx));
+    await audit(db, actorOf(context), { action: "seed.activity", outcome: "accepted", summary: "skipped" in result ? "Already had activity" : `${result.runs} demo income runs` });
+    return result;
+  }),
+};
+
+/** Used by the bootstrap script on a fresh database. */
+export async function loadDemoNetwork(tx: Tx) {
+  const ids = new Map<string, number>();
+  for (const m of DEMO_MEMBERS) {
+    const [row] = await tx.select({ id: schema.members.id }).from(schema.members).where(eq(schema.members.handle, m.handle));
+    if (row) {
+      ids.set(m.handle, row.id);
+      continue;
     }
+    const [created] = await tx
+      .insert(schema.members)
+      .values({
+        handle: m.handle,
+        displayName: m.displayName,
+        email: m.email,
+        role: m.role,
+        level: m.level,
+        points: m.points,
+        clout: m.clout,
+        walletCents: m.walletCents,
+        kycStatus: m.kycStatus,
+        world: m.world,
+        homeBrand: m.homeBrand,
+        bio: m.bio,
+        ongoingAccess: m.level >= 2,
+        createdAt: new Date(Date.now() - 40 * 86400000),
+      })
+      .returning();
+    await tx.insert(schema.walletEntries).values({ memberId: created.id, deltaCents: m.walletCents, balanceAfterCents: m.walletCents, reason: "Demo opening balance (simulated)" });
+    ids.set(m.handle, created.id);
+  }
 
-    for (const p of DEMO_PROJECTS) {
-      const creatorId = ids.get(p.creator);
-      if (!creatorId) continue;
-      const fee = pitchFeeCents(p.capitalGoalCents, p.riskTier);
-      const [project] = await db
-        .insert(schema.projects)
-        .values({
-          creatorId,
-          title: p.title,
-          tagline: p.tagline,
-          description: p.description,
-          brand: p.brand,
-          category: p.category,
-          riskTier: p.riskTier,
-          capitalGoalCents: p.capitalGoalCents,
-          pitchFeeCents: fee,
-          pitchFormat: p.pitchFormat,
-          equityOfferedBp: p.equityOfferedBp,
-          stage: p.stage,
-          status: p.status ?? "live",
-          escrowVendor: p.escrowVendor,
-          escrowFeeCents: ESCROW_FEE_CENTS,
-          escrowStatus: "assigned",
-          lastActivityAt: new Date(Date.now() - (p.idleDays ?? 1) * 86400000),
-          createdAt: new Date(Date.now() - (p.idleDays ?? 1) * 86400000 - 7 * 86400000),
-          defaultReason:
-            p.status === "default_notice"
-              ? "No milestone evidence for 58 days and no reply in the project room. Cure window open, escrow frozen not seized."
-              : null,
-          graceUntil: p.status === "default_notice" ? daysFromNow(9) : null,
-        })
-        .returning();
-
-      await db.insert(schema.milestones).values(
-        MILESTONE_TEMPLATES.map((m, i) => ({
-          projectId: project.id,
-          stage: i + 1,
-          title: m.title,
-          requirement: m.requirement,
-          pointValue: pointValueForStage(i + 1),
-          status: i + 1 < p.stage ? "verified" : i + 1 === p.stage ? "open" : "locked",
-          evidence:
-            i + 1 < p.stage
-              ? "Evidence accepted by the escrow reviewer and published in the project room."
-              : null,
-          verifiedAt: i + 1 < p.stage ? new Date(Date.now() - 20 * 86400000) : null,
-          dueAt: daysFromNow(30 * (i + 1)),
-        })),
-      );
-
-      await addFee(creatorId, project.id, fee, p);
-    }
-
-    await seedTickets(ids);
-    await db.insert(schema.features).values(
-      DEMO_FEATURES.map((f) => ({
-        title: f.title,
-        description: f.description,
-        targetCents: f.targetCents,
-        votes: f.votes,
-        fundedCents: Math.round(f.targetCents * 0.2),
-        status: "funding",
-      })),
-    );
-    await db.insert(schema.proposals).values(
-      DEMO_PROPOSALS.map((p) => ({
+  for (const p of DEMO_PROJECTS) {
+    const creatorId = ids.get(p.creator);
+    if (!creatorId) continue;
+    const fee = pitchFeeCents(p.capitalGoalCents, p.riskTier);
+    const [project] = await tx
+      .insert(schema.projects)
+      .values({
+        creatorId,
         title: p.title,
-        body: p.body,
-        closesAt: daysFromNow(11),
-        yesWeight: 0,
-        noWeight: 0,
+        tagline: p.tagline,
+        description: p.description,
+        brand: p.brand,
+        category: p.category,
+        riskTier: p.riskTier,
+        capitalGoalCents: p.capitalGoalCents,
+        pitchFeeCents: fee,
+        pitchFormat: p.pitchFormat,
+        equityOfferedBp: p.equityOfferedBp,
+        stage: p.stage,
+        status: p.status ?? "live",
+        escrowVendor: p.escrowVendor,
+        escrowFeeCents: ESCROW_FEE_CENTS,
+        escrowStatus: "assigned",
+        lastActivityAt: new Date(Date.now() - (p.idleDays ?? 1) * 86400000),
+        createdAt: new Date(Date.now() - (p.idleDays ?? 1) * 86400000 - 7 * 86400000),
+        defaultReason:
+          p.status === "default_notice" ? "No milestone evidence for 58 days and no reply in the project room. Cure window open, escrow frozen not seized." : null,
+        graceUntil: p.status === "default_notice" ? daysFromNow(9) : null,
+      })
+      .returning();
+    await openCreatorPosition(tx, project.id, creatorId);
+
+    await tx.insert(schema.milestones).values(
+      MILESTONE_TEMPLATES.map((m, i) => ({
+        projectId: project.id,
+        stage: i + 1,
+        title: m.title,
+        requirement: m.requirement,
+        pointValue: pointValueForStage(i + 1),
+        status: i + 1 < p.stage ? "verified" : i + 1 === p.stage ? "open" : "locked",
+        evidence: i + 1 < p.stage ? "Evidence accepted by the escrow reviewer and published in the project room." : null,
+        verifiedAt: i + 1 < p.stage ? new Date(Date.now() - 20 * 86400000) : null,
+        dueAt: daysFromNow(30 * (i + 1)),
       })),
     );
 
-    const houseId = ids.get("house")!;
-    await db.insert(schema.notices).values({
+    // Demo fees were "paid" before the network existed, so only the landing side is booked.
+    const reserveCents = Math.round(fee * 0.025);
+    await addLedger(tx, { kind: "pitch_fee", amountCents: fee - reserveCents, memberId: creatorId, projectId: project.id, bucket: "house", note: `Demo pitch listing fee (${p.riskTier} risk)` });
+    await addLedger(tx, { kind: "reserve_contribution", amountCents: reserveCents, memberId: creatorId, projectId: project.id, bucket: "reserve", note: "Reserve share of demo pitch fee" });
+    await addLedger(tx, { kind: "escrow_retainer", amountCents: ESCROW_FEE_CENTS, memberId: creatorId, projectId: project.id, bucket: "vendor", note: `Escrow retainer to ${p.escrowVendor}` });
+  }
+
+  await seedTickets(tx, ids);
+  await tx.insert(schema.features).values(
+    DEMO_FEATURES.map((f) => ({ title: f.title, description: f.description, targetCents: f.targetCents, votes: f.votes, fundedCents: 0, status: "funding" })),
+  );
+  await tx.insert(schema.proposals).values(
+    DEMO_PROPOSALS.map((p) => ({ title: p.title, body: p.body, authorId: ids.get("house") ?? null, closesAt: daysFromNow(11), yesWeight: 0, noWeight: 0 })),
+  );
+
+  const houseId = ids.get("house");
+  if (houseId) {
+    await tx.insert(schema.notices).values({
       memberId: houseId,
-      kind: "grace",
+      kind: "info",
       title: "Simulated network — no real money moves",
       body: "Every wallet, escrow hold and fee on this build is a ledger entry. No processor is connected and no security is offered or sold.",
       recoveryPath: "The path to operating legally is laid out, costed, at /compliance.",
     });
+  }
+  await seedActivity(tx);
+  logDecision("seed", "Demo network loaded", { members: ids.size, projects: DEMO_PROJECTS.length });
+  return { seeded: true, members: ids.size, projects: DEMO_PROJECTS.length };
+}
 
-    await seedActivity();
-    return { seeded: true, members: ids.size, projects: DEMO_PROJECTS.length };
-  }),
-
-  /** Idempotent: income runs on mature projects and one submission waiting for the escrow desk. */
-  activity: base.handler(() => seedActivity()),
-};
-
-async function seedActivity() {
-  const [d] = await db.select({ c: sql<number>`count(*)` }).from(schema.distributions);
-  if (Number(d?.c ?? 0) > 0) return { skipped: true };
-  const all = await db.select().from(schema.projects);
+async function seedActivity(tx: Tx) {
+  const [d] = await tx.select({ c: sql<number>`count(*)` }).from(schema.distributions);
+  if (Number(d?.c ?? 0) > 0) return { skipped: true as const };
+  const all = await tx.select().from(schema.projects);
   let runs = 0;
   for (const p of all.filter((x) => x.stage >= 3 && x.status === "live")) {
     const gross = Math.round(p.capitalGoalCents * 0.06);
-    await runDistribution({ projectId: p.id, grossCents: gross, period: "2026-08", note: "Seed: reported revenue" });
-    await runDistribution({
-      projectId: p.id,
-      grossCents: Math.round(gross * 1.18),
-      period: "2026-09",
-      note: "Seed: reported revenue",
-    });
+    await runDistribution(tx, { projectId: p.id, grossCents: gross, period: "2026-08", note: "Seed: reported revenue" });
+    await runDistribution(tx, { projectId: p.id, grossCents: Math.round(gross * 1.18), period: "2026-09", note: "Seed: reported revenue" });
     runs += 2;
   }
   const early = all.find((x) => x.stage <= 2 && x.status === "live");
   if (early) {
-    await db
+    await tx
       .update(schema.milestones)
       .set({
         status: "submitted",
+        submittedAt: new Date(),
         evidence:
           "Signed letters of intent from three buyers, a bank statement export showing the first $1,180 of pre-orders, and a 4-minute walkthrough of the working prototype.",
       })
-      .where(
-        and(eq(schema.milestones.projectId, early.id), eq(schema.milestones.stage, early.stage)),
-      );
+      .where(and(eq(schema.milestones.projectId, early.id), eq(schema.milestones.stage, early.stage), eq(schema.milestones.status, "open")));
   }
   return { runs, submittedFor: early?.id ?? null };
 }
 
-async function addFee(creatorId: number, projectId: number, fee: number, p: DemoProject) {
-  await db.insert(schema.ledger).values([
-    {
-      kind: "pitch_fee",
-      amountCents: fee,
-      memberId: creatorId,
-      projectId,
-      bucket: "house",
-      note: `Pitch listing fee (${p.riskTier} risk, $${(p.capitalGoalCents / 100).toLocaleString()} goal)`,
-    },
-    {
-      kind: "house_fee",
-      amountCents: Math.round(fee * 0.075),
-      memberId: creatorId,
-      projectId,
-      bucket: "house",
-      note: "House share of pitch fee",
-    },
-    {
-      kind: "reserve_contribution",
-      amountCents: Math.round(fee * 0.025),
-      memberId: creatorId,
-      projectId,
-      bucket: "reserve",
-      note: "Reserve share of pitch fee",
-    },
-    {
-      kind: "escrow_fee",
-      amountCents: ESCROW_FEE_CENTS,
-      memberId: creatorId,
-      projectId,
-      bucket: "escrow",
-      note: `Escrow retainer to ${p.escrowVendor}`,
-    },
-  ]);
-}
-
-/** A handful of tickets so portfolios, equity and the rate curve are not empty. */
-async function seedTickets(ids: Map<string, number>) {
-  const projects = await db.select().from(schema.projects);
+/** A handful of tickets so portfolios, equity and the rate curve are not empty. Deterministic. */
+async function seedTickets(tx: Tx, ids: Map<string, number>) {
+  const projects = await tx.select().from(schema.projects);
   const backers = ["nkem", "juno", "sol", "vex", "dee"];
+  let n = 0;
   for (const project of projects) {
     for (const handle of backers) {
       const memberId = ids.get(handle);
-      if (!memberId || memberId === project.creatorId) continue;
-      if (Math.random() > 0.55) continue;
+      n++;
+      if (!memberId || memberId === project.creatorId || n % 2 === 0) continue;
       const amount = 1000;
-      const fee = 100;
-      const escrowed = amount - fee;
-      const points = pointValueForStage(project.stage);
-      const equityBp = Math.max(
-        1,
-        Math.round((escrowed / project.capitalGoalCents) * project.equityOfferedBp),
-      );
-      await db.insert(schema.investments).values({
+      const split = feeSplit(100);
+      const escrowed = amount - split.feeCents;
+      const equityBp = Math.max(1, Math.round((escrowed / project.capitalGoalCents) * project.equityOfferedBp));
+      await tx.insert(schema.investments).values({
         projectId: project.id,
         memberId,
         amountCents: amount,
-        pointsAwarded: points,
+        pointsAwarded: pointValueForStage(project.stage),
         equityBp,
         stage: project.stage,
-        houseFeeCents: fee,
+        houseFeeCents: split.feeCents,
         escrowStatus: "held",
-        createdAt: new Date(Date.now() - Math.round(Math.random() * 20) * 86400000),
+        heldCents: escrowed,
+        createdAt: new Date(Date.now() - (n % 20) * 86400000),
       });
-      await db
+      await transferEquity(tx, { projectId: project.id, fromMemberId: project.creatorId, toMemberId: memberId, bp: equityBp, costCents: escrowed });
+      await tx
         .update(schema.projects)
         .set({
-          raisedCents: project.raisedCents + escrowed,
-          backerCount: project.backerCount + 1,
-          equityAllocatedBp: project.equityAllocatedBp + equityBp,
+          raisedCents: sql`${schema.projects.raisedCents} + ${escrowed}`,
+          backerCount: sql`${schema.projects.backerCount} + 1`,
+          equityAllocatedBp: sql`${schema.projects.equityAllocatedBp} + ${equityBp}`,
         })
         .where(eq(schema.projects.id, project.id));
-      await db.insert(schema.ledger).values([
-        {
-          kind: "investment",
-          amountCents: escrowed,
-          memberId,
-          projectId: project.id,
-          bucket: "escrow",
-          note: `Ticket escrowed with ${project.escrowVendor}`,
-        },
-        {
-          kind: "house_fee",
-          amountCents: 75,
-          memberId,
-          projectId: project.id,
-          bucket: "house",
-          note: "House share of ticket",
-        },
-        {
-          kind: "reserve_contribution",
-          amountCents: 25,
-          memberId,
-          projectId: project.id,
-          bucket: "reserve",
-          note: "Reserve share of ticket",
-        },
-      ]);
-      await db.insert(schema.draws).values({
-        memberId,
-        projectId: project.id,
-        weekKey: "2026-W38",
-        decision: "yes",
-        drawnAt: new Date(Date.now() - 9 * 86400000),
-        decidedAt: new Date(Date.now() - 9 * 86400000),
-      });
+      await addLedger(tx, { kind: "investment", amountCents: escrowed, memberId, projectId: project.id, bucket: "escrow", note: `Demo ticket escrowed with ${project.escrowVendor}` });
+      await addLedger(tx, { kind: "house_fee", amountCents: split.houseCents, memberId, projectId: project.id, bucket: "house", note: "House share of demo ticket" });
+      await addLedger(tx, { kind: "reserve_contribution", amountCents: split.reserveCents, memberId, projectId: project.id, bucket: "reserve", note: "Reserve share of demo ticket" });
+      await tx.insert(schema.draws).values({ memberId, projectId: project.id, weekKey: "2026-W38", decision: "yes", drawnAt: new Date(Date.now() - 9 * 86400000), decidedAt: new Date(Date.now() - 9 * 86400000) });
     }
   }
 
-  // A thin points book so the Exchange has a rate and depth.
-  const seller = ids.get("juno")!;
-  const seller2 = ids.get("sol")!;
-  const buyer = ids.get("nkem")!;
-  await db.insert(schema.pointListings).values([
-    {
-      sellerId: seller,
-      points: 120,
-      priceCentsPerPoint: 6,
-      status: "filled",
-      buyerId: buyer,
-      filledAt: new Date(Date.now() - 6 * 86400000),
-    },
-    {
-      sellerId: seller2,
-      points: 200,
-      priceCentsPerPoint: 5,
-      status: "filled",
-      buyerId: buyer,
-      filledAt: new Date(Date.now() - 3 * 86400000),
-    },
+  const seller = ids.get("juno");
+  const seller2 = ids.get("sol");
+  if (!seller || !seller2) throw new ORPCError("INTERNAL_SERVER_ERROR", { message: "Demo sellers missing" });
+  // Open asks only: filled history would need matching wallet movements, so it is not faked.
+  await tx.insert(schema.pointListings).values([
     { sellerId: seller, points: 90, priceCentsPerPoint: 7, status: "open" },
     { sellerId: seller2, points: 150, priceCentsPerPoint: 8, status: "open" },
   ]);
+  // Listed points are escrowed out of the seller's balance, exactly as exchange.listPoints does.
+  await tx.update(schema.members).set({ points: sql`${schema.members.points} - 90` }).where(eq(schema.members.id, seller));
+  await tx.update(schema.members).set({ points: sql`${schema.members.points} - 150` }).where(eq(schema.members.id, seller2));
 }

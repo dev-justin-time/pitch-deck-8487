@@ -141,7 +141,7 @@ export const members = {
             await addLedger(tx, { kind: "opening_credit", amountCents: member.walletCents, memberId: member.id, bucket: "member", note: "Opening simulated club credit (no card charged)" });
             await addNotice(tx, {
               memberId: member.id,
-              kind: "grace",
+              kind: "info",
               title: "Welcome — nothing here can bankrupt you",
               body: "Your starting balance is simulated club credit. Level 0 gives you three draws a week, a $10 cap per project, and an answer required before the next draw unlocks.",
               recoveryPath: "Request a simulated identity review from your portfolio whenever you like. Skipping it only limits Orbital Works and score lookups.",

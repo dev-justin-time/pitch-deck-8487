@@ -11,10 +11,12 @@ export function usePointBook() {
 export function useEquityBook() {
   return useQuery(orpc.exchange.equityBook.queryOptions());
 }
-export function useMyListings(memberId: number | null) {
-  return useQuery(
-    orpc.exchange.myListings.queryOptions({ input: { memberId: memberId ?? 0 }, enabled: !!memberId }),
-  );
+export function useMyListings(enabled: boolean) {
+  return useQuery(orpc.exchange.myListings.queryOptions({ enabled }));
+}
+export function useCancelEquityListing() {
+  const refresh = useRefreshAll();
+  return useMutation(orpc.exchange.cancelEquityListing.mutationOptions({ onSuccess: refresh }));
 }
 export function useSellPoints() {
   const refresh = useRefreshAll();

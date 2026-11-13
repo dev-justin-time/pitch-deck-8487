@@ -5,8 +5,19 @@ import { useRefreshAll } from "../hooks/refresh";
 export function useTaskBoard() {
   return useQuery(orpc.clout.board.queryOptions({ staleTime: Infinity }));
 }
-export function useMyTasks(memberId: number | null) {
-  return useQuery(orpc.clout.mine.queryOptions({ input: { memberId: memberId ?? 0 }, enabled: !!memberId }));
+export function useMyTasks(enabled: boolean) {
+  return useQuery(orpc.clout.mine.queryOptions({ enabled }));
+}
+export function useTaskQueue(enabled: boolean) {
+  return useQuery(orpc.clout.queue.queryOptions({ enabled }));
+}
+export function useReviewTask() {
+  const refresh = useRefreshAll();
+  return useMutation(orpc.clout.reviewTask.mutationOptions({ onSuccess: refresh }));
+}
+export function useFinalizeProposal() {
+  const refresh = useRefreshAll();
+  return useMutation(orpc.governance.finalize.mutationOptions({ onSuccess: refresh }));
 }
 export function useClaimTask() {
   const refresh = useRefreshAll();

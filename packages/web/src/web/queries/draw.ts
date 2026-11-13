@@ -2,8 +2,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { orpc } from "../lib/api";
 import { useRefreshAll } from "../hooks/refresh";
 
-export function useDrawState(memberId: number | null) {
-  return useQuery(orpc.draw.current.queryOptions({ input: { memberId: memberId ?? 0 }, enabled: !!memberId }));
+export function useDrawState(enabled: boolean) {
+  return useQuery(orpc.draw.current.queryOptions({ enabled }));
 }
 
 export function useDrawNext() {

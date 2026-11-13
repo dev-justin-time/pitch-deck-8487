@@ -1,9 +1,13 @@
 import { Link } from "wouter";
 import { usePortfolio } from "../queries/payouts";
 import { useMyNotices } from "../queries/house";
-import { useKyc, useTopUp } from "../queries/members";
+import { useWalletHistory } from "../queries/members";
+import { useMyIdentity, useRequestIdentity } from "../queries/identity";
+import { useDismissNotice } from "../queries/house";
+import { useState } from "react";
 import { useSession } from "../components/session";
-import { Btn, Card, Empty, ErrorLine, Loading, NeedPassport, PageHead, Stat } from "../components/bits";
+import { Btn, Card, Empty, ErrorLine, Field, Loading, NeedPassport, OkLine, PageHead, Pill, Stat } from "../components/bits";
+import { log } from "../lib/log";
 import { BRAND_LABEL, STATUS_LABEL, date, money, pct } from "../lib/format";
 
 export default function PortfolioPage() {
@@ -11,12 +15,14 @@ export default function PortfolioPage() {
 }
 
 function Portfolio() {
-  const { memberId, member } = useSession();
-  const pf = usePortfolio(memberId);
-  const notices = useMyNotices(memberId);
-  const topUp = useTopUp();
-  const kyc = useKyc();
+  const { member } = useSession();
+  const signedIn = !!member;
+  const pf = usePortfolio(signedIn);
+  const notices = useMyNotices(signedIn);
+  const history = useWalletHistory(signedIn);
+  const dismiss = useDismissNotice();
   if (pf.isLoading) return <Loading />;
+  if (pf.isError) return <ErrorLine error={pf.error} />;
   const t = pf.data?.totals;
 
   return (
@@ -28,7 +34,7 @@ function Portfolio() {
         <Stat label="Wallet (sim)" value={money(member?.walletCents)} sub={`${member?.points ?? 0} points · ${member?.clout ?? 0} clout`} />
         <Stat label="Cost basis" value={money(t?.costCents)} />
         <Stat label="Income received" value={money(t?.incomeCents)} sub="from published income runs" />
-        <Stat label="Estimated mark" value={money(t?.markCents)} sub="not an offer" />
+        <Stat label="Estimated mark" value={money(t?.markCents)} sub={`not an offer · ${money(t?.heldCents)} of your tickets still in escrow`} />
       </div>
 
       <div className="mt-8 grid gap-6 lg:grid-cols-[1.6fr_1fr]">
@@ -59,41 +65,138 @@ function Portfolio() {
           )}
         </Card>
         <div className="space-y-4">
-          <Card>
-            <div className="k-label">Simulated wallet</div>
-            <p className="mt-2 text-xs text-muted-foreground">Adds club credit. No card is charged; nothing here is withdrawable.</p>
-            <div className="mt-3 grid grid-cols-3 gap-2">
-              {[1000, 5000, 20000].map((c) => (
-                <Btn key={c} variant="outline" className="text-xs" loading={topUp.isPending && topUp.variables?.amountCents === c} onClick={() => memberId && topUp.mutate({ memberId, amountCents: c })}>+{money(c)}</Btn>
-              ))}
-            </div>
-            <ErrorLine error={topUp.error} />
-          </Card>
-          <Card>
-            <div className="k-label">Identity tier — {member?.kycStatus}</div>
-            <p className="mt-2 text-xs text-muted-foreground">Simulated. In production a KYC vendor writes this, never the platform. Orbital Works requires verified or above.</p>
-            <div className="mt-3 grid grid-cols-2 gap-2">
-              <Btn variant="outline" className="text-xs" loading={kyc.isPending && kyc.variables?.tier === "verified"} onClick={() => memberId && kyc.mutate({ memberId, tier: "verified" })}>Verified</Btn>
-              <Btn variant="outline" className="text-xs" loading={kyc.isPending && kyc.variables?.tier === "accredited"} onClick={() => memberId && kyc.mutate({ memberId, tier: "accredited" })}>Accredited</Btn>
-            </div>
-          </Card>
+          <IdentityCard />
           <Card>
             <div className="k-label">Notices</div>
             {notices.isLoading ? <Loading /> : !notices.data?.length ? <p className="mt-2 text-sm text-muted-foreground">Nothing open.</p> : (
               <ul className="mt-3 space-y-3">
                 {notices.data.map((n) => (
                   <li key={n.id} className="border-t border-border pt-3 text-sm">
-                    <div className="flex items-center gap-2"><span className="k-chip">{n.kind.replace("_", " ")}</span><span className="text-xs text-muted-foreground">{date(n.createdAt)}</span></div>
+                    <div className="flex items-center gap-2"><span className="k-chip">{n.kind.split("_").join(" ")}</span><span className="text-xs text-muted-foreground">{date(n.createdAt)}</span></div>
                     <div className="mt-1 font-semibold">{n.title}</div>
                     <p className="text-xs text-muted-foreground">{n.body}</p>
                     {n.recoveryPath && <p className="mt-1 text-xs"><b>Recovery path:</b> {n.recoveryPath}</p>}
+                    {!LOCKED_NOTICES.includes(n.kind) && (
+                      <Btn variant="ghost" className="mt-1 px-2 py-1 text-xs" loading={dismiss.isPending && dismiss.variables?.noticeId === n.id} onClick={() => { log.decide("portfolio", "Notice dismissed", { noticeId: n.id, kind: n.kind }); dismiss.mutate({ noticeId: n.id }); }}>
+                        Dismiss
+                      </Btn>
+                    )}
                   </li>
                 ))}
               </ul>
             )}
           </Card>
+          <ErrorLine error={dismiss.error} />
         </div>
       </div>
+
+      <Card className="mt-6">
+        <div className="flex items-center justify-between">
+          <div className="k-label">Wallet history</div>
+          <span className="text-xs text-muted-foreground">last 60 movements · simulated credit, not withdrawable</span>
+        </div>
+        {history.isLoading ? (
+          <Loading />
+        ) : !history.data?.length ? (
+          <p className="mt-3 text-sm text-muted-foreground">No movements recorded yet. Credit comes from onboarding, the house desk, sales and income runs.</p>
+        ) : (
+          <div className="mt-3 max-h-96 overflow-auto">
+            <table className="w-full text-sm k-num">
+              <thead className="text-left text-xs text-muted-foreground">
+                <tr><th className="py-1">When</th><th>What</th><th className="text-right">Change</th><th className="text-right">Balance</th></tr>
+              </thead>
+              <tbody>
+                {history.data.map((w) => (
+                  <tr key={w.id} className="border-t border-border">
+                    <td className="py-2 text-xs text-muted-foreground">{date(w.createdAt)}</td>
+                    <td>
+                      {w.reason}
+                      {w.projectId && <Link to={`/forge/project/${w.projectId}`} className="k-link ml-2 text-xs">#{w.projectId}</Link>}
+                    </td>
+                    <td className={`text-right ${w.deltaCents >= 0 ? "text-good" : "text-destructive"}`}>{w.deltaCents >= 0 ? "+" : ""}{money(w.deltaCents)}</td>
+                    <td className="text-right">{money(w.balanceAfterCents)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
     </div>
+  );
+}
+
+const LOCKED_NOTICES = ["default_notice", "foreclosure", "grace"];
+
+function IdentityCard() {
+  const { member } = useSession();
+  const mine = useMyIdentity(!!member);
+  const request = useRequestIdentity();
+  const [tier, setTier] = useState<"verified" | "accredited">("verified");
+  const [statement, setStatement] = useState("");
+  const [ok, setOk] = useState<string | null>(null);
+  const status = mine.data?.kycStatus ?? member?.kycStatus ?? "none";
+  const pending = mine.data?.requests.find((r) => r.status === "pending");
+  const topTier = status === "accredited";
+
+  return (
+    <Card>
+      <div className="k-label">Identity tier</div>
+      <div className="mt-2 flex items-center gap-2">
+        <span className="k-display text-2xl capitalize">{status}</span>
+        <Pill tone={status === "accredited" ? "good" : status === "verified" ? "good" : "muted"}>simulated</Pill>
+      </div>
+      <p className="mt-2 text-xs text-muted-foreground">
+        You file a request; only an administrator can change your tier. No document is checked in this build — in production a KYC vendor would write this. Orbital Works backing and other-member score lookups need the accredited tier.
+      </p>
+      {pending ? (
+        <p className="mt-3 rounded-[var(--radius)] border border-border p-3 text-xs">
+          <b className="capitalize">{pending.tier}</b> review pending since {date(pending.createdAt)}.
+        </p>
+      ) : !topTier ? (
+        <form
+          className="mt-3 grid gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            log.decide("identity", "Tier review requested", { tier });
+            request.mutate(
+              { tier, statement: statement.trim() },
+              { onSuccess: () => { setStatement(""); setOk("Request filed. The house desk will review it."); } },
+            );
+          }}
+        >
+          <Field label="Tier">
+            <select className="k-input" value={tier} onChange={(e) => setTier(e.target.value as typeof tier)} aria-label="Requested tier">
+              {status !== "verified" && <option value="verified">Verified</option>}
+              <option value="accredited">Accredited</option>
+            </select>
+          </Field>
+          <Field label="Statement" help="20–800 characters. Who you are and why you need the tier. Do not paste ID numbers or documents.">
+            <textarea className="k-input" rows={3} minLength={20} maxLength={800} required value={statement} onChange={(e) => setStatement(e.target.value)} aria-label="Statement for reviewer" />
+          </Field>
+          <Btn type="submit" variant="outline" className="text-xs" loading={request.isPending} disabled={statement.trim().length < 20}>
+            Request review
+          </Btn>
+          <ErrorLine error={request.error} />
+          <OkLine>{ok}</OkLine>
+        </form>
+      ) : (
+        <p className="mt-3 text-xs">Highest tier held.</p>
+      )}
+      {!!mine.data?.requests.length && (
+        <ul className="mt-4 space-y-2 border-t border-border pt-3 text-xs">
+          {mine.data.requests.map((r) => (
+            <li key={r.id}>
+              <div className="flex items-center gap-2">
+                <span className="capitalize">{r.tier}</span>
+                <Pill tone={r.status === "approved" ? "good" : r.status === "rejected" ? "bad" : "warn"}>{r.status}</Pill>
+                <span className="text-muted-foreground">{date(r.createdAt)}</span>
+              </div>
+              {r.reviewNote && <p className="mt-1 text-muted-foreground">Reviewer: {r.reviewNote}</p>}
+            </li>
+          ))}
+        </ul>
+      )}
+    </Card>
   );
 }

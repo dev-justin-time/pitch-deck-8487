@@ -1,54 +1,97 @@
-import { createContext, useContext, useEffect, useState } from "react";
-import { useMember, useSetWorld } from "../queries/members";
+import { createContext, useContext, useEffect, useRef, useState } from "react";
+import { useQueryClient } from "@tanstack/react-query";
+import { useMe, useSetWorld } from "../queries/members";
+import { authClient, clearToken } from "../lib/auth";
 import { log } from "../lib/log";
 
 export type World = "underground" | "lab" | "prestige";
-const KEY_ID = "kinship.memberId";
 const KEY_WORLD = "kinship.world";
 
+type Me = NonNullable<ReturnType<typeof useMe>["data"]>;
+
 type Ctx = {
+  /** Signed-in account (Better Auth), or null. */
+  user: Me["user"];
+  /** The account's passport, or null when signed out or not yet onboarded. */
+  member: Me["member"];
+  /** Convenience: the passport id, derived from the session — never chosen by the client. */
   memberId: number | null;
-  setMemberId: (id: number | null) => void;
+  isAdmin: boolean;
   world: World;
   setWorld: (w: World) => void;
-  member: ReturnType<typeof useMember>["data"];
   loading: boolean;
+  signOut: () => Promise<void>;
 };
 const SessionCtx = createContext<Ctx | null>(null);
 
 export function SessionProvider({ children }: { children: React.ReactNode }) {
-  const [memberId, setId] = useState<number | null>(() => {
-    const v = Number(localStorage.getItem(KEY_ID));
-    return v > 0 ? v : null;
-  });
-  const [world, setW] = useState<World>(() => (localStorage.getItem(KEY_WORLD) as World) || "underground");
-  const member = useMember(memberId);
+  const qc = useQueryClient();
+  const auth = authClient.useSession();
+  const me = useMe();
   const saveWorld = useSetWorld();
+  const [world, setW] = useState<World>(() => (localStorage.getItem(KEY_WORLD) as World) || "underground");
+  const lastUser = useRef<string | null | undefined>(undefined);
+
+  const authUserId = auth.data?.user.id ?? null;
+  // Whenever the account changes (sign-in, sign-out, switch), drop every cached read so one
+  // person's wallet or notices can never render for another.
+  useEffect(() => {
+    if (auth.isPending) return;
+    if (lastUser.current !== undefined && lastUser.current !== authUserId) {
+      log.decide("session", "Account changed; caches reset", { signedIn: !!authUserId });
+      void qc.resetQueries();
+    }
+    lastUser.current = authUserId;
+  }, [authUserId, auth.isPending, qc]);
+
+  const member = me.data?.member ?? null;
+  const user = me.data?.user ?? null;
+
+  // A passport carries a saved world; adopt it once per sign-in.
+  const adopted = useRef<number | null>(null);
+  useEffect(() => {
+    if (member && adopted.current !== member.id) {
+      adopted.current = member.id;
+      if (member.world && member.world !== world) setW(member.world as World);
+    }
+    if (!member) adopted.current = null;
+  }, [member, world]);
 
   useEffect(() => {
     document.documentElement.dataset.world = world;
     localStorage.setItem(KEY_WORLD, world);
   }, [world]);
 
-  useEffect(() => {
-    if (member.isError) setMemberId(null);
-  }, [member.isError]);
-
-  function setMemberId(id: number | null) {
-    log.decide("session", "Demo passport switched", { memberId: id });
-    if (id) localStorage.setItem(KEY_ID, String(id));
-    else localStorage.removeItem(KEY_ID);
-    setId(id);
-  }
   function setWorld(w: World) {
-    log.decide("theme", "Visual world selected", { world: w });
+    log.decide("theme", "Visual world selected", { world: w, saved: !!member });
     setW(w);
-    if (memberId) saveWorld.mutate({ memberId, world: w });
+    if (member) saveWorld.mutate({ world: w });
+  }
+
+  async function signOut() {
+    log.decide("session", "Sign-out requested");
+    try {
+      await authClient.signOut();
+    } catch (error) {
+      log.warn("session", "Server sign-out failed; clearing local session anyway", error instanceof Error ? error.message : undefined);
+    }
+    clearToken();
+    await auth.refetch?.();
+    await qc.resetQueries();
   }
 
   return (
     <SessionCtx.Provider
-      value={{ memberId, setMemberId, world, setWorld, member: member.data, loading: member.isLoading }}
+      value={{
+        user,
+        member,
+        memberId: member?.id ?? null,
+        isAdmin: member?.role === "admin",
+        world,
+        setWorld,
+        loading: auth.isPending || me.isLoading,
+        signOut,
+      }}
     >
       {children}
     </SessionCtx.Provider>

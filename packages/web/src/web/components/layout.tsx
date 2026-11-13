@@ -23,7 +23,7 @@ const WORLDS: { key: World; label: string }[] = [
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const [loc] = useLocation();
-  const { member, world, setWorld, setMemberId } = useSession();
+  const { member, user, world, setWorld, signOut } = useSession();
   const [open, setOpen] = useState(false);
   const nav = member?.role === "admin" ? [...NAV, { to: "/house", label: "House" }] : NAV;
 
@@ -65,14 +65,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
               ))}
             </select>
             {member ? (
-              <Link to="/portfolio" className="hidden items-center gap-2 rounded-[var(--radius)] border border-border px-3 py-1.5 text-xs sm:flex">
-                <span className="font-semibold">@{member.handle}</span>
-                <span className="k-num text-primary">{money(member.walletCents)}</span>
-                <span className="k-num text-muted-foreground">{num(member.points)} pts</span>
+              <>
+                <Link to="/portfolio" className="hidden items-center gap-2 rounded-[var(--radius)] border border-border px-3 py-1.5 text-xs sm:flex">
+                  <span className="font-semibold">@{member.handle}</span>
+                  <span className="k-num text-primary">{money(member.walletCents)}</span>
+                  <span className="k-num text-muted-foreground">{num(member.points)} pts</span>
+                </Link>
+                <button onClick={() => void signOut()} className="hidden rounded-[var(--radius)] border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground md:block">
+                  Sign out
+                </button>
+              </>
+            ) : user ? (
+              <Link to="/join" className="rounded-[var(--radius)] bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">
+                Finish passport
               </Link>
             ) : (
               <Link to="/join" className="rounded-[var(--radius)] bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground">
-                Get a passport
+                Sign in / join
               </Link>
             )}
             <button className="lg:hidden" onClick={() => setOpen(!open)} aria-label="Menu">
@@ -87,6 +96,11 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 {n.label}
               </Link>
             ))}
+            {user && (
+              <button className="py-1.5 text-left text-sm text-muted-foreground" onClick={() => { setOpen(false); void signOut(); }}>
+                Sign out
+              </button>
+            )}
           </nav>
         )}
       </header>
@@ -113,9 +127,9 @@ export function Layout({ children }: { children: React.ReactNode }) {
           <div className="grid gap-1">
             <span className="k-label">Straight talk</span>
             <Link to="/compliance">Compliance roadmap</Link>
-            {member && (
-              <button className="text-left" onClick={() => setMemberId(null)}>
-                Sign out @{member.handle}
+            {user && (
+              <button className="text-left" onClick={() => void signOut()}>
+                Sign out {member ? `@${member.handle}` : user.email}
               </button>
             )}
           </div>

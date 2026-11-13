@@ -4,7 +4,8 @@ import { Shuffle, Check, X, Lock } from "lucide-react";
 import { useDecide, useDrawNext, useDrawState } from "../queries/draw";
 import { useLevelUp, useUnlockOngoing } from "../queries/members";
 import { useSession } from "../components/session";
-import { Bar, Btn, Card, ErrorLine, Loading, NeedPassport, PageHead, Stat } from "../components/bits";
+import { Bar, Btn, Card, ErrorLine, Loading, NeedPassport, OkLine, PageHead, Stat, newKey } from "../components/bits";
+import { log } from "../lib/log";
 import { BRAND_LABEL, money, num, pct } from "../lib/format";
 
 export default function ForgePage() {
@@ -16,8 +17,8 @@ export default function ForgePage() {
 }
 
 function Draw() {
-  const { memberId, member } = useSession();
-  const state = useDrawState(memberId);
+  const { member } = useSession();
+  const state = useDrawState(!!member);
   const next = useDrawNext();
   const decide = useDecide();
   const levelUp = useLevelUp();
@@ -25,6 +26,7 @@ function Draw() {
   const [amount, setAmount] = useState(10);
   const [note, setNote] = useState("");
   const [last, setLast] = useState<string | null>(null);
+  const [levelMsg, setLevelMsg] = useState<string | null>(null);
 
   if (state.isError) return <ErrorLine error={state.error} />;
   if (state.isLoading || !state.data) return <Loading label="Shuffling" />;
@@ -32,9 +34,11 @@ function Draw() {
   const p = s.project;
 
   function answer(decision: "yes" | "bye") {
-    if (!s.pending || !memberId) return;
+    if (!s.pending) return;
+    if (decision === "bye" && !window.confirm("Bye is permanent — this round will never be shown to you again. Continue?")) return;
+    log.decide("draw", "Decision submitted", { drawId: s.pending.id, decision, amountCents: decision === "yes" ? amount * 100 : 0 });
     decide.mutate(
-      { memberId, drawId: s.pending.id, decision, amountCents: decision === "yes" ? amount * 100 : undefined, note: note || undefined },
+      { drawId: s.pending.id, decision, amountCents: decision === "yes" ? amount * 100 : undefined, note: note || undefined, idempotencyKey: newKey() },
       {
         onSuccess: (r) => {
           setNote("");
@@ -119,7 +123,7 @@ function Draw() {
                   : "Level up for more draws, or earn points on the Hub task board."}
               </p>
               {s.week.remaining > 0 && (
-                <Btn className="mt-6 px-8 py-3" loading={next.isPending} onClick={() => memberId && next.mutate({ memberId }, { onSuccess: () => setLast(null) })}>
+                <Btn className="mt-6 px-8 py-3" loading={next.isPending} onClick={() => { log.decide("draw", "Next card requested", { remaining: s.week.remaining }); next.mutate(undefined, { onSuccess: () => setLast(null) }); }}>
                   Draw a card
                 </Btn>
               )}
@@ -140,14 +144,15 @@ function Draw() {
                 <div className="mt-3"><Bar value={(member?.points ?? 0) / s.nextLevel.pointCost} /></div>
                 <div className="mt-1 text-xs text-muted-foreground k-num">{num(member?.points)} / {num(s.nextLevel.pointCost)} points</div>
                 <div className="mt-4 grid grid-cols-2 gap-2">
-                  <Btn variant="outline" className="text-xs" loading={levelUp.isPending && levelUp.variables?.method === "points"} disabled={(member?.points ?? 0) < s.nextLevel.pointCost} onClick={() => memberId && levelUp.mutate({ memberId, method: "points" })}>
+                  <Btn variant="outline" className="text-xs" loading={levelUp.isPending && levelUp.variables?.method === "points"} disabled={(member?.points ?? 0) < s.nextLevel.pointCost} onClick={() => levelUp.mutate({ method: "points", idempotencyKey: newKey() }, { onSuccess: (r) => setLevelMsg(`Now L${r.level} ${r.name}.`) })}>
                     Use {num(s.nextLevel.pointCost)} pts
                   </Btn>
-                  <Btn className="text-xs" loading={levelUp.isPending && levelUp.variables?.method === "fee"} onClick={() => memberId && levelUp.mutate({ memberId, method: "fee" })}>
+                  <Btn className="text-xs" loading={levelUp.isPending && levelUp.variables?.method === "fee"} disabled={(member?.walletCents ?? 0) < s.nextLevel.feeCents} onClick={() => { if (window.confirm(`Pay ${money(s.nextLevel!.feeCents)} in club credit to reach L${s.nextLevel!.level}?`)) levelUp.mutate({ method: "fee", idempotencyKey: newKey() }, { onSuccess: (r) => setLevelMsg(`Now L${r.level} ${r.name}.`) }); }}>
                     Pay {money(s.nextLevel.feeCents)}
                   </Btn>
                 </div>
                 <ErrorLine error={levelUp.error} />
+                <OkLine>{levelMsg}</OkLine>
               </>
             ) : (
               <p className="mt-2 text-sm">Top level. Nothing left to unlock.</p>
@@ -159,7 +164,7 @@ function Draw() {
               <p className="mt-2 text-sm text-muted-foreground">
                 At L0–L1 you only see brand-new rounds. Rounds past stage 1 earn more points per ticket. Unlock them for $5, or reach Operator.
               </p>
-              <Btn variant="outline" className="mt-3 w-full text-xs" loading={unlock.isPending} onClick={() => memberId && unlock.mutate({ memberId })}>Unlock for $5.00</Btn>
+              <Btn variant="outline" className="mt-3 w-full text-xs" loading={unlock.isPending} disabled={(member?.walletCents ?? 0) < 500} onClick={() => unlock.mutate({ idempotencyKey: newKey() })}>Unlock for $5.00</Btn>
               <ErrorLine error={unlock.error} />
             </Card>
           )}

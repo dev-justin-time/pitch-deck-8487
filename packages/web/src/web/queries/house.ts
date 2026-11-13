@@ -2,19 +2,17 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { orpc } from "../lib/api";
 import { useRefreshAll } from "../hooks/refresh";
 
-export function useHouseLedger(memberId: number | null, enabled: boolean) {
-  return useQuery(orpc.house.ledger.queryOptions({ input: { memberId: memberId ?? 0 }, enabled }));
+export function useHouseLedger(enabled: boolean) {
+  return useQuery(orpc.house.ledger.queryOptions({ enabled }));
 }
-export function useWatchlist(memberId: number | null, enabled: boolean) {
-  return useQuery(orpc.house.watchlist.queryOptions({ input: { memberId: memberId ?? 0 }, enabled }));
+export function useWatchlist(enabled: boolean) {
+  return useQuery(orpc.house.watchlist.queryOptions({ enabled }));
 }
-export function useHouseNotices(memberId: number | null, enabled: boolean) {
-  return useQuery(orpc.house.notices.queryOptions({ input: { memberId: memberId ?? 0 }, enabled }));
+export function useHouseNotices(enabled: boolean) {
+  return useQuery(orpc.house.notices.queryOptions({ enabled }));
 }
-export function useMyNotices(memberId: number | null) {
-  return useQuery(
-    orpc.house.myNotices.queryOptions({ input: { memberId: memberId ?? 0 }, enabled: !!memberId }),
-  );
+export function useMyNotices(enabled: boolean) {
+  return useQuery(orpc.house.myNotices.queryOptions({ enabled }));
 }
 export function useFeatures() {
   return useQuery(orpc.house.features.queryOptions());
@@ -38,4 +36,12 @@ export function useCureNotice() {
 export function useForeclose() {
   const refresh = useRefreshAll();
   return useMutation(orpc.house.foreclose.mutationOptions({ onSuccess: refresh }));
+}
+export function useFundFeature() {
+  const refresh = useRefreshAll();
+  return useMutation(orpc.house.fundFeature.mutationOptions({ onSuccess: refresh }));
+}
+export function useDismissNotice() {
+  const refresh = useRefreshAll();
+  return useMutation(orpc.house.dismissNotice.mutationOptions({ onSuccess: refresh }));
 }

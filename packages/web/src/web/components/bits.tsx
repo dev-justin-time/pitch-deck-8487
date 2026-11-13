@@ -87,17 +87,19 @@ export function Bar({ value }: { value: number }) {
 
 /** Pages that need a passport render this when nobody is signed in. */
 export function NeedPassport({ children }: { children: React.ReactNode }) {
-  const { memberId, loading } = useSession();
+  const { member, user, loading } = useSession();
   if (loading) return <Loading />;
-  if (!memberId)
+  if (!member)
     return (
       <Card className="mx-auto max-w-lg text-center">
-        <div className="k-display text-3xl">Passport required</div>
+        <div className="k-display text-3xl">{user ? "Finish your passport" : "Sign in required"}</div>
         <p className="mt-2 text-sm text-muted-foreground">
-          Make one in thirty seconds, or step in as a demo member to look around.
+          {user
+            ? "You're signed in. Pick a handle and home club to get your passport — it takes thirty seconds."
+            : "Browsing is open to everyone. Backing, pitching, trading and voting need an account and a passport."}
         </p>
         <Link to="/join" className="mt-4 inline-block rounded-[var(--radius)] bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground">
-          Get a passport
+          {user ? "Finish passport" : "Sign in or create an account"}
         </Link>
       </Card>
     );
@@ -106,4 +108,47 @@ export function NeedPassport({ children }: { children: React.ReactNode }) {
 
 export function Empty({ children }: { children: React.ReactNode }) {
   return <div className="rounded-[var(--radius)] border border-dashed border-border p-6 text-center text-sm text-muted-foreground">{children}</div>;
+}
+
+/** Admin-only screens. The server enforces the same rule; this only avoids a useless round-trip. */
+export function NeedAdmin({ children }: { children: React.ReactNode }) {
+  const { isAdmin, loading } = useSession();
+  if (loading) return <Loading />;
+  if (!isAdmin)
+    return (
+      <Card className="mx-auto max-w-lg text-center">
+        <div className="k-display text-3xl">House desk only</div>
+        <p className="mt-2 text-sm text-muted-foreground">This area is for the network's administrators. Admin rights are granted from the server, never from the browser.</p>
+      </Card>
+    );
+  return <>{children}</>;
+}
+
+/** Fresh key per submit so a double-click or retry replays the first result instead of charging twice. */
+export const newKey = () =>
+  typeof crypto !== "undefined" && "randomUUID" in crypto
+    ? crypto.randomUUID()
+    : `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 12)}-${Math.random().toString(36).slice(2, 12)}`;
+
+/** Confirmation line shown after a mutation succeeds. */
+export function OkLine({ children }: { children?: React.ReactNode }) {
+  if (!children) return null;
+  return <p className="mt-2 text-sm text-primary">{children}</p>;
+}
+
+/** Small status pill used across queues and histories. */
+export function Pill({ children, tone = "muted" }: { children: React.ReactNode; tone?: "muted" | "good" | "warn" | "bad" }) {
+  return (
+    <span
+      className={cn(
+        "inline-block rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide",
+        tone === "muted" && "border-border text-muted-foreground",
+        tone === "good" && "border-primary/50 text-primary",
+        tone === "warn" && "border-amber-400/50 text-amber-400",
+        tone === "bad" && "border-destructive/60 text-destructive",
+      )}
+    >
+      {children}
+    </span>
+  );
 }

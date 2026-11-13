@@ -1,8 +1,9 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useLocation } from "wouter";
 import { useFeeQuote, usePitch } from "../queries/projects";
 import { useSession } from "../components/session";
-import { Btn, Card, ErrorLine, Field, NeedPassport, PageHead } from "../components/bits";
+import { Btn, Card, ErrorLine, Field, NeedPassport, PageHead, newKey } from "../components/bits";
+import { log } from "../lib/log";
 import { money } from "../lib/format";
 
 const CATEGORIES = ["software", "consumer", "apparel", "worn_apparel", "media", "service", "deep_tech", "space", "other"];
@@ -16,27 +17,31 @@ export default function PitchPage() {
 }
 
 function PitchForm() {
-  const { memberId, member } = useSession();
+  const { member } = useSession();
   const [, go] = useLocation();
   const pitch = usePitch();
+  // One key per pitch attempt: a retry after a network blip replays the first charge instead of billing twice.
+  const attemptKey = useRef(newKey());
   const [f, setF] = useState({
     title: "", tagline: "", description: "", brand: "forge" as "forge" | "orbital" | "sole", category: "other",
     riskTier: "low" as "low" | "medium" | "high", goal: 10000, pitchFormat: "writeup" as "video" | "deck" | "drawing" | "prototype" | "writeup",
     pitchUrl: "", equityPct: 10, accept: false,
   });
   const quote = useFeeQuote(f.goal * 100, f.riskTier);
+  const short = !!quote.data && (member?.walletCents ?? 0) < quote.data.totalCents;
   const set = <K extends keyof typeof f>(k: K, v: (typeof f)[K]) => setF({ ...f, [k]: v });
 
   function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!memberId || !f.accept) return;
+    if (!member || !f.accept) return;
+    log.decide("pitch", "Pitch submitted", { brand: f.brand, riskTier: f.riskTier, goalCents: f.goal * 100, feeCents: quote.data?.totalCents });
     pitch.mutate(
       {
-        memberId, title: f.title, tagline: f.tagline, description: f.description, brand: f.brand, category: f.category,
+        idempotencyKey: attemptKey.current, title: f.title, tagline: f.tagline, description: f.description, brand: f.brand, category: f.category,
         riskTier: f.riskTier, capitalGoalCents: f.goal * 100, pitchFormat: f.pitchFormat, pitchUrl: f.pitchUrl || undefined,
         equityOfferedBp: Math.round(f.equityPct * 100), acceptTerms: true,
       },
-      { onSuccess: (p) => go(`/forge/project/${p.id}`) },
+      { onSuccess: (p) => { attemptKey.current = newKey(); go(`/forge/project/${p.id}`); } },
     );
   }
 
@@ -103,7 +108,8 @@ function PitchForm() {
               <input type="checkbox" aria-label="Accept legal and milestone terms" checked={f.accept} onChange={(e) => set("accept", e.target.checked)} />
               <span>The venture is legal where I operate, my claims are true to my knowledge, and I accept the milestone, grace, default and 25% cancellation terms.</span>
             </label>
-            <Btn type="submit" className="mt-4 w-full" disabled={!f.accept} loading={pitch.isPending}>Pay and go live</Btn>
+            {short && <p className="mt-3 text-xs text-destructive">Your club credit doesn't cover this fee. Lower the goal or risk tier, or ask the house desk for a credit grant.</p>}
+            <Btn type="submit" className="mt-4 w-full" disabled={!f.accept || short} loading={pitch.isPending}>Pay and go live</Btn>
             <ErrorLine error={pitch.error} />
           </Card>
         </div>

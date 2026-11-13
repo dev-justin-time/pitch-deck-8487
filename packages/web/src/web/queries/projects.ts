@@ -8,17 +8,17 @@ export function useProjects(filter?: { brand?: Brand; status?: string }) {
   return useQuery(orpc.projects.list.queryOptions({ input: filter ?? {} }));
 }
 
-export function useProject(projectId: number, viewerId: number | null) {
+export function useProject(projectId: number) {
   return useQuery(
     orpc.projects.get.queryOptions({
-      input: { projectId, viewerId: viewerId ?? undefined },
+      input: { projectId },
       enabled: Number.isFinite(projectId) && projectId > 0,
     }),
   );
 }
 
-export function useMyProjects(memberId: number | null) {
-  return useQuery(orpc.projects.mine.queryOptions({ input: { memberId: memberId ?? 0 }, enabled: !!memberId }));
+export function useMyProjects(enabled: boolean) {
+  return useQuery(orpc.projects.mine.queryOptions({ enabled }));
 }
 
 export function useFeeQuote(capitalGoalCents: number, riskTier: "low" | "medium" | "high") {

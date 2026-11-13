@@ -282,3 +282,55 @@
 .k-deal {
   animation: k-deal 0.45s cubic-bezier(0.2, 0.8, 0.2, 1) both;
 }
+
+/* ---------- Landing: technical motion ---------- */
+@keyframes k-wire {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+.k-wire {
+  animation: k-wire 0.9s linear infinite;
+}
+@keyframes k-ping {
+  0% {
+    transform: scale(0.8);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(1.35);
+    opacity: 0;
+  }
+}
+.k-ping {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: k-ping 1.1s ease-out infinite;
+}
+@keyframes k-scan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100vh);
+  }
+}
+.k-scanline {
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 120px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--primary) 9%, transparent), transparent);
+  animation: k-scan 6s linear infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .k-wire,
+  .k-ping,
+  .k-scanline,
+  .k-deal {
+    animation: none !important;
+  }
+  .k-scanline {
+    display: none;
+  }
+}
