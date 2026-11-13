@@ -1,0 +1,58 @@
+<svg width="1600" height="900" viewBox="0 0 1600 900" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="900" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#09090F"/>
+      <stop offset="0.45" stop-color="#120F1B"/>
+      <stop offset="1" stop-color="#0B0A12"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="212" y1="196" x2="1280" y2="706" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#C6FF3D"/>
+      <stop offset="0.5" stop-color="#FF3DA5"/>
+      <stop offset="1" stop-color="#5EE7FF"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="18" result="blur" />
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#bg)"/>
+
+  <g opacity="0.2">
+    <path d="M0 735H1600" stroke="#C6FF3D" stroke-width="2"/>
+    <path d="M0 620H1600" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <path d="M0 505H1600" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <path d="M0 390H1600" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <path d="M0 275H1600" stroke="#FFFFFF" stroke-opacity="0.12"/>
+    <path d="M0 160H1600" stroke="#FFFFFF" stroke-opacity="0.12"/>
+  </g>
+
+  <g opacity="0.14">
+    <path d="M240 0L1600 900" stroke="#FFFFFF" stroke-width="1"/>
+    <path d="M0 0L1360 900" stroke="#FFFFFF" stroke-width="1"/>
+    <path d="M1100 0L1600 540" stroke="#FFFFFF" stroke-width="1"/>
+    <path d="M0 250L1300 900" stroke="#FFFFFF" stroke-width="1"/>
+  </g>
+
+  <g filter="url(#glow)">
+    <rect x="210" y="170" width="1180" height="510" rx="22" fill="rgba(255,255,255,0.02)" stroke="rgba(255,255,255,0.28)"/>
+    <path d="M255 670L710 240H890L630 670H255Z" fill="url(#accent)" opacity="0.9"/>
+    <path d="M620 670L1065 240H1240L890 670H620Z" fill="#14121E" stroke="#FFFFFF" stroke-opacity="0.14"/>
+    <path d="M880 670L1355 240H1440L1025 670H880Z" fill="#0E1823" stroke="#5EE7FF" stroke-opacity="0.45"/>
+  </g>
+
+  <g>
+    <text x="240" y="410" fill="#F7F4FF" font-family="Arial, Helvetica, sans-serif" font-size="96" font-weight="700" letter-spacing="11">KINSHIP</text>
+    <text x="240" y="510" fill="#C6FF3D" font-family="Arial, Helvetica, sans-serif" font-size="96" font-weight="700" letter-spacing="11">COLLECTIVE</text>
+    <text x="246" y="590" fill="#D9D5E8" font-family="Arial, Helvetica, sans-serif" font-size="28" letter-spacing="5">PITCH • FUND • TRUST • BUILD</text>
+  </g>
+
+  <g opacity="0.9">
+    <circle cx="1240" cy="240" r="8" fill="#C6FF3D"/>
+    <circle cx="1290" cy="250" r="8" fill="#FF3DA5"/>
+    <circle cx="1210" cy="300" r="8" fill="#5EE7FF"/>
+  </g>
+</svg>
